@@ -18,6 +18,10 @@ directory it lives in (`ls -a`), so visitors browse the site like a filesystem.
 
 Hidden files and directories are ignored. Math (`$x$`, `\[…\]`) renders with KaTeX.
 
+Each build writes a content hash to `version.txt` and into every page. Pages
+check it on load and reload themselves when a newer build is deployed, so
+visitors don't need a hard refresh (GitHub Pages caches pages for 10 minutes).
+
 ## website.conf
 
 Optional, at the site root; it's sourced by bash.

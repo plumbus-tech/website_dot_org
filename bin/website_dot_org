@@ -167,7 +167,7 @@ render() {
 
     write_nav "$cwd" "$prefix" "$current" >"$NAV_FILE"
     args=(-f org -t html5 --standalone --template "$SHARE/template.html" --lua-filter "$SHARE/autolink.lua"
-          --katex=https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/ --shift-heading-level-by=1 --include-before-body "$NAV_FILE" -V "root=$prefix" -V "content-width=$CONTENT_WIDTH")
+          --katex=https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/ --shift-heading-level-by=1 --include-before-body "$NAV_FILE" -V "root=$prefix" -V "content-width=$CONTENT_WIDTH" -V "build-id=$BUILD_ID")
     if ! grep -qi '^[[:space:]]*#+title:' "$src"; then
         args+=(-M "pagetitle=~${cwd:+/$cwd}")
     fi
@@ -226,6 +226,17 @@ copy_assets() {
     done < <(find "$SRC" -mindepth 1 \( -name '.*' -o -path "$OUT" \) -prune -o \( -type f -o -type l \) -print0)
 }
 
+# Short hash of everything that feeds the build. Pages embed it and compare
+# against version.txt, reloading themselves when a newer deploy is live.
+build_id() {
+    {
+        (cd "$SRC" && find . -mindepth 1 \( -name '.*' -o -path "./${OUT_REL:-.}" \) -prune -o -type f -print0 \
+            | sort -z | xargs -0 -r sha256sum)
+        (cd "$SHARE" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
+        sha256sum <"$(readlink -f "$0")"
+    } | sha256sum | cut -c1-12
+}
+
 [[ ${1:-} == build && $# -le 3 ]] || usage
 SRC=$(realpath -e "${2:-.}")
 OUT=$(realpath -m "${3:-build}")
@@ -255,9 +266,11 @@ fi
 NAV_FILE=$(mktemp)
 trap 'rm -f "$NAV_FILE"' EXIT
 
+BUILD_ID=$(build_id)
 rm -rf "$OUT"
 mkdir -p "$OUT"
 copy_assets
+echo "$BUILD_ID" >"$OUT/version.txt"
 if [[ ! -f $OUT/typography.css ]]; then cp "$SHARE/typography.css" "$OUT/"; fi
 process_dir ""
 echo "Build complete. Output in $OUT/"

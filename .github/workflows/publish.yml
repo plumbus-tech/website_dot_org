@@ -38,6 +38,7 @@ jobs:
           test -f $out/sub/index.html
           test -f $out/sub/page.html
           test -f $out/typography.css
+          grep -q "\"$(cat $out/version.txt)\"" $out/index.html
           grep -q 'href="https://github.com/plumbus-tech/website_dot_org"' $out/index.html
           grep -q 'guest@example.org:~/sub' $out/sub/page.html
           grep -q katex $out/notes.html
