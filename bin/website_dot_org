@@ -167,7 +167,7 @@ render() {
 
     write_nav "$cwd" "$prefix" "$current" >"$NAV_FILE"
     args=(-f org -t html5 --standalone --template "$SHARE/template.html" --lua-filter "$SHARE/autolink.lua"
-          --katex=https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/ --shift-heading-level-by=1 --include-before-body "$NAV_FILE" -V "root=$prefix")
+          --katex=https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/ --shift-heading-level-by=1 --include-before-body "$NAV_FILE" -V "root=$prefix" -V "content-width=$CONTENT_WIDTH")
     if ! grep -qi '^[[:space:]]*#+title:' "$src"; then
         args+=(-M "pagetitle=~${cwd:+/$cwd}")
     fi
@@ -237,6 +237,7 @@ OUT_REL=""
 if [[ $OUT == "$SRC"/* ]]; then OUT_REL=${OUT#"$SRC"/}; fi
 
 SITE_HOST=""
+CONTENT_WIDTH=60em
 declare -A NAV_OVERRIDE=()
 EXCLUDE=()
 if [[ -f $SRC/website.conf ]]; then

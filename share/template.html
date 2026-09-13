@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>$pagetitle$</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ubuntu+Sans+Mono:wght@400;700&amp;family=Noto+Serif:wght@400;700&amp;display=swap" />
+  <style>
+    #content { max-width: $content-width$; margin: auto; }
+    .title { text-align: center; margin-bottom: .2em; }
+    pre { border: 1px solid #e6e6e6; border-radius: 3px; background-color: #f2f2f2;
+          padding: 8pt; overflow: auto; margin: 1.2em; }
+  </style>
 $if(highlighting-css)$
   <style>
 $highlighting-css$
@@ -19,6 +25,7 @@ $if(math)$
 $endif$
 </head>
 <body>
+<div id="content">
 $for(include-before)$
 $include-before$
 $endfor$
@@ -26,5 +33,6 @@ $if(title)$
 <h1 class="title">$title$</h1>
 $endif$
 $body$
+</div>
 </body>
 </html>

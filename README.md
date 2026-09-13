@@ -24,6 +24,7 @@ Optional, at the site root; it's sourced by bash.
 
 ```bash
 SITE_HOST=example.org                            # prompt host; default: CNAME, else dir name
+CONTENT_WIDTH=60em                               # max page width, centered; default 60em
 declare -A NAV_OVERRIDE=(                        # replace a nav entry: "target|label"
     [cv]="cv/resume.pdf|resume.pdf"              # target is site-root relative or a URL
 )
@@ -50,10 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/plumbus-tech/website_dot_org:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { submodules: recursive }
       - run: website_dot_org build . build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with: { path: build }
   deploy:
     needs: build
@@ -61,7 +62,7 @@ jobs:
     permissions: { pages: write, id-token: write }
     environment: { name: github-pages }
     steps:
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5
 ```
 
 Without Docker, `bin/website_dot_org build SRC OUT` needs bash and pandoc 3.
