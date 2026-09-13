@@ -1,0 +1,7 @@
+#+TITLE: Notes
+
+* Math
+
+Euler's identity is $e^{i\pi} + 1 = 0$, and
+
+\[ \sum_{k=1}^{n} k = \frac{n(n+1)}{2} \]

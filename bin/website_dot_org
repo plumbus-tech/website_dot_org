@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# website_dot_org: turn a directory tree of .org files into a static website.
+#
+# Every directory with .org files becomes a page whose header is an
+# `ls -a`-style nav bar of its pages, subdirectories, LINK_* files and URL
+# symlinks. See README.md for the rules and website.conf options.
+set -euo pipefail
+shopt -s nullglob
+export LC_COLLATE=C
+
+SHARE=${WEBSITE_DOT_ORG_SHARE:-$(dirname "$(readlink -f "$0")")/../share}
+
+usage() {
+    echo "Usage: website_dot_org build [SRC=.] [OUT=build]" >&2
+    exit 1
+}
+
+html_escape() {
+    local s=$1
+    s=${s//&/&amp;}; s=${s//</&lt;}; s=${s//>/&gt;}; s=${s//\"/&quot;}
+    printf '%s' "$s"
+}
+
+is_url() { [[ $1 =~ ^https?:// ]]; }
+
+# A git submodule checkout has a .git file instead of a .git directory.
+is_submodule() { [[ -f $1/.git ]]; }
+
+# Is path $1 (relative to SRC) left out of the site?
+is_excluded() {
+    local rel=$1 pat
+    [[ /$rel == */.* || $rel == website.conf ]] && return 0
+    if [[ -n $OUT_REL ]] && [[ $rel == "$OUT_REL" || $rel == "$OUT_REL"/* ]]; then
+        return 0
+    fi
+    for pat in "${EXCLUDE[@]}"; do
+        # shellcheck disable=SC2053 # $pat is a glob on purpose
+        if [[ $rel == $pat || $rel == $pat/* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Nav entries of the directory being rendered. HREFs are relative to the
+# site root (or absolute URLs); KEY identifies the page for underlining.
+NAV_KEY=() NAV_LABEL=() NAV_HREF=() NAV_KIND=()
+
+# add_nav KEY LABEL HREF KIND
+# NAV_OVERRIDE[KEY]="target|label" replaces the entry's target and label.
+add_nav() {
+    local key=$1 label=$2 href=$3 kind=$4
+    if [[ -v NAV_OVERRIDE[$key] ]]; then
+        href=${NAV_OVERRIDE[$key]%%|*}
+        label=${NAV_OVERRIDE[$key]#*|}
+        if is_url "$href"; then kind=link; else kind=file; fi
+    fi
+    NAV_KEY+=("$key") NAV_LABEL+=("$label") NAV_HREF+=("$href") NAV_KIND+=("$kind")
+}
+
+# collect_nav REL — fill the NAV_* arrays for directory SRC/REL.
+collect_nav() {
+    local rel=$1 dir=$SRC${1:+/$1} sub=${1:+$1/} path name target
+    NAV_KEY=() NAV_LABEL=() NAV_HREF=() NAV_KIND=()
+
+    for path in "$dir"/LINK_*; do
+        name=${path##*/}
+        if [[ -f $path ]] && ! is_excluded "$sub$name"; then
+            target=$(head -n 1 "$path" | tr -d '\r\n')
+            if [[ -n $target ]]; then
+                add_nav "${name#LINK_}" "${name#LINK_}" "$target" link
+            fi
+        fi
+    done
+
+    for path in "$dir"/*.org; do
+        name=${path##*/}
+        name=${name%.org}
+        if [[ $name != index ]] && ! is_excluded "$sub$name.org"; then
+            add_nav "$name" "$name.org" "$sub$name.html" file
+        fi
+    done
+
+    for path in "$dir"/*; do
+        name=${path##*/}
+        if is_excluded "$sub$name"; then
+            continue
+        elif [[ -L $path ]]; then
+            target=$(readlink "$path")
+            if is_url "$target"; then
+                add_nav "$name" "$name" "$target" link
+            fi
+        elif [[ -d $path ]]; then
+            if is_submodule "$path"; then
+                if [[ -f $path/README.org ]]; then
+                    add_nav "$name/README.org" "$name/README.org" "$sub$name/README.html" file
+                fi
+            elif compgen -G "$path/*.org" >/dev/null; then
+                add_nav "$name" "$name" "$sub$name/index.html" dir
+            elif [[ -v NAV_OVERRIDE[$name] ]]; then
+                add_nav "$name" "$name" "" dir
+            fi
+        fi
+    done
+}
+
+# write_nav CWD PREFIX CURRENT — print the nav bar for the collected entries.
+# CWD is the directory shown in the prompt, PREFIX the ../ path from the page
+# to the site root, CURRENT the key of the page being rendered.
+write_nav() {
+    local cwd=$1 prefix=$2 current=$3 parent="" i width=0 href color style underline
+    local -a order sorted keys=(. "${NAV_KEY[@]}") labels=(. "${NAV_LABEL[@]}")
+    local -a hrefs=("${cwd:+$cwd/}index.html" "${NAV_HREF[@]}") kinds=(dir "${NAV_KIND[@]}")
+
+    # Index 0 is ".", the last index is ".." (below root only), the rest sorted.
+    mapfile -t sorted < <(
+        for i in "${!NAV_LABEL[@]}"; do
+            printf '%s\t%s\n' "${NAV_LABEL[$i]}" $((i + 1))
+        done | sort -f -t $'\t' -k1,1 | cut -f2
+    )
+    order=(0)
+    if [[ -n $cwd ]]; then
+        if [[ $cwd == */* ]]; then parent=${cwd%/*}/; fi
+        order+=("${#keys[@]}")
+        keys+=(..) labels+=(..) hrefs+=("${parent}index.html") kinds+=(dir)
+    fi
+    order+=("${sorted[@]}")
+
+    for i in "${order[@]}"; do
+        if (( ${#labels[$i]} > width )); then width=${#labels[$i]}; fi
+    done
+    width=$((width + 2))
+
+    cat <<EOF
+<div style="background: #232627; color: #ffffff; font-family: 'Ubuntu Sans Mono', monospace; font-size: 16px; padding: 8px; border-radius: 0; margin-bottom: 20px;">
+<div style="margin-bottom: 10px;">guest@$(html_escape "$SITE_HOST"):$(html_escape "~${cwd:+/$cwd}")\$ echo LINKS: \$(ls -a)</div>
+<div style="border-left: 4px solid #1d99f3; padding-left: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(${width}ch, 1fr)); gap: 0;">LINKS:
+EOF
+    for i in "${order[@]}"; do
+        href=${hrefs[$i]}
+        if ! is_url "$href"; then href=$prefix$href; fi
+        case ${kinds[$i]} in
+            dir) color="#1d99f3" style="font-weight: bold;" ;;
+            link) color="#1abc9c" style="font-weight: bold;" ;;
+            *) color="#FFFFFF" style="" ;;
+        esac
+        underline="text-decoration: none;"
+        if [[ ${keys[$i]} == "$current" ]]; then underline="text-decoration: underline;"; fi
+        printf '<span style="white-space: pre;"><a href="%s" style="color: %s; %s %s">%s</a>%*s</span>\n' \
+            "$(html_escape "$href")" "$color" "$style" "$underline" \
+            "$(html_escape "${labels[$i]}")" $((width - ${#labels[$i]})) ""
+    done
+    echo '</div></div>'
+}
+
+# render SRC_FILE OUT_FILE CWD CURRENT — render one page with the nav of the
+# collected entries. SRC_FILE may be /dev/null for a nav-only index.
+render() {
+    local src=$1 out=$2 cwd=$3 current=$4 page_dir prefix=""
+    local -a args
+
+    page_dir=$(dirname "${out#"$OUT"/}")
+    if [[ $page_dir != . ]]; then
+        prefix=${page_dir//[!\/]/}/
+        prefix=${prefix//\//..\/}
+    fi
+
+    write_nav "$cwd" "$prefix" "$current" >"$NAV_FILE"
+    args=(-f org -t html5 --standalone --template "$SHARE/template.html" --lua-filter "$SHARE/autolink.lua"
+          --katex=https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/ --shift-heading-level-by=1 --include-before-body "$NAV_FILE" -V "root=$prefix")
+    if ! grep -qi '^[[:space:]]*#+title:' "$src"; then
+        args+=(-M "pagetitle=~${cwd:+/$cwd}")
+    fi
+    mkdir -p "$(dirname "$out")"
+    (cd "$(dirname "$src")" && pandoc "${args[@]}" -o "$out" "$src")
+}
+
+# process_dir REL — render the pages of SRC/REL and recurse.
+process_dir() {
+    local rel=$1 dir=$SRC${1:+/$1} sub=${1:+$1/} path name key
+
+    if [[ -z $rel ]] || compgen -G "$dir/*.org" >/dev/null; then
+        collect_nav "$rel"
+        for path in "$dir"/*.org; do
+            name=${path##*/}
+            name=${name%.org}
+            if is_excluded "$sub$name.org"; then continue; fi
+            key=$name
+            if [[ $name == index ]]; then key=.; fi
+            render "$path" "$OUT/$sub$name.html" "$rel" "$key"
+        done
+        if [[ ! -f $dir/index.org ]]; then
+            render /dev/null "$OUT/${sub}index.html" "$rel" .
+        fi
+        # Submodules are one page (their README.org) under the parent's nav.
+        for path in "$dir"/*/; do
+            path=${path%/}
+            name=${path##*/}
+            if ! is_excluded "$sub$name" && is_submodule "$path" && [[ -f $path/README.org ]]; then
+                render "$path/README.org" "$OUT/$sub$name/README.html" "$rel" "$name/README.org"
+            fi
+        done
+    fi
+
+    for path in "$dir"/*/; do
+        path=${path%/}
+        name=${path##*/}
+        if [[ ! -L $path ]] && ! is_excluded "$sub$name" && ! is_submodule "$path"; then
+            process_dir "$sub$name"
+        fi
+    done
+}
+
+# Copy every file that isn't a page source into OUT, preserving paths.
+copy_assets() {
+    local path rel
+    while IFS= read -r -d '' path; do
+        rel=${path#"$SRC"/}
+        case ${rel##*/} in *.org | LINK_*) continue ;; esac
+        if is_excluded "$rel"; then continue; fi
+        if [[ -L $path ]] && { is_url "$(readlink "$path")" || [[ ! -f $path ]]; }; then
+            continue
+        fi
+        mkdir -p "$OUT/$(dirname "$rel")"
+        cp -L "$path" "$OUT/$rel"
+    done < <(find "$SRC" -mindepth 1 \( -name '.*' -o -path "$OUT" \) -prune -o \( -type f -o -type l \) -print0)
+}
+
+[[ ${1:-} == build && $# -le 3 ]] || usage
+SRC=$(realpath -e "${2:-.}")
+OUT=$(realpath -m "${3:-build}")
+if [[ $OUT == "$SRC" || $SRC == "$OUT"/* ]]; then
+    echo "website_dot_org: OUT must not contain SRC" >&2
+    exit 1
+fi
+OUT_REL=""
+if [[ $OUT == "$SRC"/* ]]; then OUT_REL=${OUT#"$SRC"/}; fi
+
+SITE_HOST=""
+declare -A NAV_OVERRIDE=()
+EXCLUDE=()
+if [[ -f $SRC/website.conf ]]; then
+    # shellcheck source=/dev/null
+    source "$SRC/website.conf"
+fi
+if [[ -z $SITE_HOST ]]; then
+    if [[ -f $SRC/CNAME ]]; then
+        SITE_HOST=$(head -n 1 "$SRC/CNAME" | tr -d '\r\n')
+    else
+        SITE_HOST=${SRC##*/}
+    fi
+fi
+
+NAV_FILE=$(mktemp)
+trap 'rm -f "$NAV_FILE"' EXIT
+
+rm -rf "$OUT"
+mkdir -p "$OUT"
+copy_assets
+if [[ ! -f $OUT/typography.css ]]; then cp "$SHARE/typography.css" "$OUT/"; fi
+process_dir ""
+echo "Build complete. Output in $OUT/"

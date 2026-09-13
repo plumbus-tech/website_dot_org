@@ -1,0 +1,68 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: website_dot_org:test
+
+      - name: Smoke test
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/example:/site" website_dot_org:test build . build
+          out=example/build
+          test -f $out/index.html
+          test -f $out/notes.html
+          test -f $out/sub/index.html
+          test -f $out/sub/page.html
+          test -f $out/typography.css
+          grep -q 'href="https://github.com/plumbus-tech/website_dot_org"' $out/index.html
+          grep -q 'guest@example.org:~/sub' $out/sub/page.html
+          grep -q katex $out/notes.html
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="$if(lang)$$lang$$else$en$endif$">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>$pagetitle$</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ubuntu+Sans+Mono:wght@400;700&amp;family=Noto+Serif:wght@400;700&amp;display=swap" />
+$if(highlighting-css)$
+  <style>
+$highlighting-css$
+  </style>
+$endif$
+  <link rel="stylesheet" href="$root$typography.css" />
+$for(header-includes)$
+  $header-includes$
+$endfor$
+$if(math)$
+  $math$
+$endif$
+</head>
+<body>
+$for(include-before)$
+$include-before$
+$endfor$
+$if(title)$
+<h1 class="title">$title$</h1>
+$endif$
+$body$
+</body>
+</html>

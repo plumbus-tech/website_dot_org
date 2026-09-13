@@ -1,0 +1,17 @@
+body {
+    font-family: "Noto Serif", serif;
+    font-size: 18px;
+}
+pre, code {
+    font-family: "Ubuntu Sans Mono", monospace;
+    font-size: 16px;
+}
+img {
+    max-width: 100%;
+    display: block;
+    margin: 0 auto;
+}
+figure {
+    margin: 1em 0;
+    text-align: center;
+}
