@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # website_dot_org: turn a directory tree of .org files into a static website.
 #
-# Every directory with .org files becomes a page whose header is an
-# `ls -a`-style nav bar of its pages, subdirectories, LINK_* files and URL
-# symlinks. See README.md for the rules and website.conf options.
+# Every directory with .org files becomes a page whose header lists its pages,
+# subdirectories, LINK_* files and URL symlinks: an `ls -a`-style terminal nav
+# bar, or (NAV_STYLE=cards) a site bar plus a grid of picture cards on index
+# pages. See README.md for the rules and website.conf options.
 set -euo pipefail
 shopt -s nullglob
 export LC_COLLATE=C
@@ -12,6 +13,11 @@ SHARE=${WEBSITE_DOT_ORG_SHARE:-$(dirname "$(readlink -f "$0")")/../share}
 
 usage() {
     echo "Usage: website_dot_org build [SRC=.] [OUT=build]" >&2
+    exit 1
+}
+
+die() {
+    echo "website_dot_org: $*" >&2
     exit 1
 }
 
@@ -26,10 +32,23 @@ is_url() { [[ $1 =~ ^https?:// ]]; }
 # A git submodule checkout has a .git file instead of a .git directory.
 is_submodule() { [[ -f $1/.git ]]; }
 
+# org_keyword FILE KEY — print the value of the first "#+KEY: value" line.
+org_keyword() {
+    [[ -f $1 ]] || return 0
+    sed -n "/^[[:space:]]*#+$2:/I{s/^[[:space:]]*#+$2:[[:space:]]*//I;s/[[:space:]]*\$//;p;q}" "$1"
+}
+
+# A page with "#+DRAFT: t" isn't rendered; cards show it greyed out.
+is_draft() {
+    local value
+    value=$(org_keyword "$1" DRAFT)
+    [[ ${value,,} =~ ^(t|true|yes)$ ]]
+}
+
 # Is path $1 (relative to SRC) left out of the site?
 is_excluded() {
     local rel=$1 pat
-    [[ /$rel == */.* || $rel == website.conf ]] && return 0
+    [[ /$rel == */.* || $rel == website.conf || $rel == "$HEAD_INCLUDE" ]] && return 0
     if [[ -n $OUT_REL ]] && [[ $rel == "$OUT_REL" || $rel == "$OUT_REL"/* ]]; then
         return 0
     fi
@@ -44,24 +63,35 @@ is_excluded() {
 
 # Nav entries of the directory being rendered. HREFs are relative to the
 # site root (or absolute URLs); KEY identifies the page for underlining.
-NAV_KEY=() NAV_LABEL=() NAV_HREF=() NAV_KIND=()
+# TITLE, IMAGE and DRAFT come from the entry's org file, for cards.
+NAV_KEY=() NAV_LABEL=() NAV_HREF=() NAV_KIND=() NAV_TITLE=() NAV_IMAGE=() NAV_DRAFT=()
 
-# add_nav KEY LABEL HREF KIND
+# add_nav KEY LABEL HREF KIND [ORG_FILE]
 # NAV_OVERRIDE[KEY]="target|label" replaces the entry's target and label.
 add_nav() {
-    local key=$1 label=$2 href=$3 kind=$4
+    local key=$1 label=$2 href=$3 kind=$4 org=${5:-} title="" image="" draft=""
     if [[ -v NAV_OVERRIDE[$key] ]]; then
         href=${NAV_OVERRIDE[$key]%%|*}
         label=${NAV_OVERRIDE[$key]#*|}
         if is_url "$href"; then kind=link; else kind=file; fi
     fi
+    if [[ -n $org && -f $SRC/$org ]]; then
+        title=$(org_keyword "$SRC/$org" CARD_TITLE)
+        if [[ -z $title ]]; then title=$(org_keyword "$SRC/$org" TITLE); fi
+        image=$(org_keyword "$SRC/$org" CARD_IMAGE)
+        if [[ -n $image ]] && ! is_url "$image"; then
+            image=$(realpath -m -s --relative-to="$SRC" "$SRC/$(dirname "$org")/$image")
+        fi
+        if is_draft "$SRC/$org"; then draft=1; fi
+    fi
     NAV_KEY+=("$key") NAV_LABEL+=("$label") NAV_HREF+=("$href") NAV_KIND+=("$kind")
+    NAV_TITLE+=("${title:-$label}") NAV_IMAGE+=("$image") NAV_DRAFT+=("$draft")
 }
 
 # collect_nav REL — fill the NAV_* arrays for directory SRC/REL.
 collect_nav() {
     local rel=$1 dir=$SRC${1:+/$1} sub=${1:+$1/} path name target
-    NAV_KEY=() NAV_LABEL=() NAV_HREF=() NAV_KIND=()
+    NAV_KEY=() NAV_LABEL=() NAV_HREF=() NAV_KIND=() NAV_TITLE=() NAV_IMAGE=() NAV_DRAFT=()
 
     for path in "$dir"/LINK_*; do
         name=${path##*/}
@@ -77,7 +107,7 @@ collect_nav() {
         name=${path##*/}
         name=${name%.org}
         if [[ $name != index ]] && ! is_excluded "$sub$name.org"; then
-            add_nav "$name" "$name.org" "$sub$name.html" file
+            add_nav "$name" "$name.org" "$sub$name.html" file "$sub$name.org"
         fi
     done
 
@@ -93,10 +123,10 @@ collect_nav() {
         elif [[ -d $path ]]; then
             if is_submodule "$path"; then
                 if [[ -f $path/README.org ]]; then
-                    add_nav "$name/README.org" "$name/README.org" "$sub$name/README.html" file
+                    add_nav "$name/README.org" "$name/README.org" "$sub$name/README.html" file "$sub$name/README.org"
                 fi
             elif compgen -G "$path/*.org" >/dev/null; then
-                add_nav "$name" "$name" "$sub$name/index.html" dir
+                add_nav "$name" "$name" "$sub$name/index.html" dir "$sub$name/index.org"
             elif [[ -v NAV_OVERRIDE[$name] ]]; then
                 add_nav "$name" "$name" "" dir
             fi
@@ -104,27 +134,41 @@ collect_nav() {
     done
 }
 
-# write_nav CWD PREFIX CURRENT — print the nav bar for the collected entries.
-# CWD is the directory shown in the prompt, PREFIX the ../ path from the page
-# to the site root, CURRENT the key of the page being rendered.
+# nav_order [drafts] — print the indices of the collected entries: names in
+# NAV_ORDER first, in that order, then the rest sorted case-insensitively.
+# Drafts are left out unless the argument is "drafts".
+nav_order() {
+    local i j rank
+    for i in "${!NAV_KEY[@]}"; do
+        if [[ -n ${NAV_DRAFT[$i]} && ${1:-} != drafts ]]; then continue; fi
+        rank=${#NAV_ORDER[@]}
+        for j in "${!NAV_ORDER[@]}"; do
+            if [[ ${NAV_ORDER[$j]} == "${NAV_KEY[$i]}" || ${NAV_ORDER[$j]} == "${NAV_LABEL[$i]}" ]]; then
+                rank=$j
+                break
+            fi
+        done
+        printf '%05d\t%s\t%s\n' "$rank" "${NAV_LABEL[$i]}" "$i"
+    done | sort -f -t $'\t' -k1,1 -k2,2 | cut -f3
+}
+
+# write_nav CWD PREFIX CURRENT — print the terminal nav bar for the collected
+# entries. CWD is the directory shown in the prompt, PREFIX the ../ path from
+# the page to the site root, CURRENT the key of the page being rendered.
 write_nav() {
     local cwd=$1 prefix=$2 current=$3 parent="" i width=0 href color style underline
     local -a order sorted keys=(. "${NAV_KEY[@]}") labels=(. "${NAV_LABEL[@]}")
     local -a hrefs=("${cwd:+$cwd/}index.html" "${NAV_HREF[@]}") kinds=(dir "${NAV_KIND[@]}")
 
-    # Index 0 is ".", the last index is ".." (below root only), the rest sorted.
-    mapfile -t sorted < <(
-        for i in "${!NAV_LABEL[@]}"; do
-            printf '%s\t%s\n' "${NAV_LABEL[$i]}" $((i + 1))
-        done | sort -f -t $'\t' -k1,1 | cut -f2
-    )
+    # Index 0 is ".", the last index is ".." (below root only), the rest ordered.
+    mapfile -t sorted < <(nav_order)
     order=(0)
     if [[ -n $cwd ]]; then
         if [[ $cwd == */* ]]; then parent=${cwd%/*}/; fi
         order+=("${#keys[@]}")
         keys+=(..) labels+=(..) hrefs+=("${parent}index.html") kinds+=(dir)
     fi
-    order+=("${sorted[@]}")
+    for i in "${sorted[@]}"; do order+=($((i + 1))); done
 
     for i in "${order[@]}"; do
         if (( ${#labels[$i]} > width )); then width=${#labels[$i]}; fi
@@ -153,10 +197,46 @@ EOF
     echo '</div></div>'
 }
 
+# write_bar PREFIX — print the site bar of NAV_STYLE=cards.
+write_bar() {
+    local prefix=$1
+    printf '<header class="wdo-bar"><a href="%sindex.html">' "$prefix"
+    if [[ -n $SITE_LOGO ]]; then
+        printf '<img src="%s" alt="" />' "$(html_escape "$prefix$SITE_LOGO")"
+    fi
+    printf '<span>%s</span></a></header>\n' "$(html_escape "$SITE_TITLE")"
+}
+
+# write_cards PREFIX — print the collected entries as a grid of picture cards.
+write_cards() {
+    local prefix=$1 i href image
+    local -a order
+    mapfile -t order < <(nav_order drafts)
+    (( ${#order[@]} )) || return 0
+    echo '<nav class="wdo-cards">'
+    for i in "${order[@]}"; do
+        href=${NAV_HREF[$i]}
+        if [[ -n $href ]] && ! is_url "$href"; then href=$prefix$href; fi
+        image=${NAV_IMAGE[$i]}
+        if [[ -n $image ]] && ! is_url "$image"; then image=$prefix$image; fi
+        if [[ -n ${NAV_DRAFT[$i]} || -z $href ]]; then
+            printf '<div class="wdo-card wdo-draft">'
+        else
+            printf '<a class="wdo-card" href="%s">' "$(html_escape "$href")"
+        fi
+        if [[ -n $image ]]; then
+            printf '<div class="wdo-card-img"><img src="%s" alt="" /></div>' "$(html_escape "$image")"
+        fi
+        printf '<div class="wdo-card-label">%s</div>' "$(html_escape "${NAV_TITLE[$i]}")"
+        if [[ -n ${NAV_DRAFT[$i]} || -z $href ]]; then echo '</div>'; else echo '</a>'; fi
+    done
+    echo '</nav>'
+}
+
 # render SRC_FILE OUT_FILE CWD CURRENT — render one page with the nav of the
 # collected entries. SRC_FILE may be /dev/null for a nav-only index.
 render() {
-    local src=$1 out=$2 cwd=$3 current=$4 page_dir prefix=""
+    local src=$1 out=$2 cwd=$3 current=$4 page_dir prefix="" title
     local -a args
 
     page_dir=$(dirname "${out#"$OUT"/}")
@@ -165,11 +245,28 @@ render() {
         prefix=${prefix//\//..\/}
     fi
 
-    write_nav "$cwd" "$prefix" "$current" >"$NAV_FILE"
-    args=(-f org -t html5 --standalone --template "$SHARE/template.html" --lua-filter "$SHARE/autolink.lua"
-          --katex=https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/ --shift-heading-level-by=1 --include-before-body "$NAV_FILE" -V "root=$prefix" -V "content-width=$CONTENT_WIDTH" -V "build-id=$BUILD_ID")
+    args=(-f org -t html5 --standalone --template "$SHARE/template.html"
+          --lua-filter "$SHARE/autolink.lua" --lua-filter "$SHARE/figure.lua" --katex
+          --shift-heading-level-by=1 --include-before-body "$NAV_FILE"
+          -V "root=$prefix" -V "content-width=$CONTENT_WIDTH" -V "build-id=$BUILD_ID")
+    if [[ $NAV_STYLE == cards ]]; then
+        write_bar "$prefix" >"$NAV_FILE"
+        args+=(-V nav-cards=1)
+        if [[ $current == . ]]; then
+            write_cards "$prefix" >"$CARDS_FILE"
+            args+=(--include-after-body "$CARDS_FILE")
+        fi
+    else
+        write_nav "$cwd" "$prefix" "$current" >"$NAV_FILE"
+    fi
+    if [[ -n $HEAD_INCLUDE ]]; then
+        sed "s|\\\$root\\\$|$prefix|g" "$SRC/$HEAD_INCLUDE" >"$HEAD_FILE"
+        args+=(--include-in-header "$HEAD_FILE")
+    fi
     if ! grep -qi '^[[:space:]]*#+title:' "$src"; then
-        args+=(-M "pagetitle=~${cwd:+/$cwd}")
+        title=$(org_keyword "$src" CARD_TITLE)
+        if [[ -z $title && $NAV_STYLE == cards ]]; then title=$SITE_TITLE; fi
+        args+=(-M "pagetitle=${title:-~${cwd:+/$cwd}}")
     fi
     mkdir -p "$(dirname "$out")"
     (cd "$(dirname "$src")" && pandoc "${args[@]}" -o "$out" "$src")
@@ -184,7 +281,7 @@ process_dir() {
         for path in "$dir"/*.org; do
             name=${path##*/}
             name=${name%.org}
-            if is_excluded "$sub$name.org"; then continue; fi
+            if is_excluded "$sub$name.org" || is_draft "$path"; then continue; fi
             key=$name
             if [[ $name == index ]]; then key=.; fi
             render "$path" "$OUT/$sub$name.html" "$rel" "$key"
@@ -241,15 +338,19 @@ build_id() {
 SRC=$(realpath -e "${2:-.}")
 OUT=$(realpath -m "${3:-build}")
 if [[ $OUT == "$SRC" || $SRC == "$OUT"/* ]]; then
-    echo "website_dot_org: OUT must not contain SRC" >&2
-    exit 1
+    die "OUT must not contain SRC"
 fi
 OUT_REL=""
 if [[ $OUT == "$SRC"/* ]]; then OUT_REL=${OUT#"$SRC"/}; fi
 
 SITE_HOST=""
+SITE_TITLE=""
+SITE_LOGO=""
+NAV_STYLE=terminal
 CONTENT_WIDTH=60em
+HEAD_INCLUDE=""
 declare -A NAV_OVERRIDE=()
+NAV_ORDER=()
 EXCLUDE=()
 if [[ -f $SRC/website.conf ]]; then
     # shellcheck source=/dev/null
@@ -262,9 +363,14 @@ if [[ -z $SITE_HOST ]]; then
         SITE_HOST=${SRC##*/}
     fi
 fi
+SITE_TITLE=${SITE_TITLE:-$SITE_HOST}
+[[ $NAV_STYLE == terminal || $NAV_STYLE == cards ]] || die "NAV_STYLE must be terminal or cards"
+[[ -z $HEAD_INCLUDE || -f $SRC/$HEAD_INCLUDE ]] || die "HEAD_INCLUDE $HEAD_INCLUDE not found"
 
 NAV_FILE=$(mktemp)
-trap 'rm -f "$NAV_FILE"' EXIT
+CARDS_FILE=$(mktemp)
+HEAD_FILE=$(mktemp)
+trap 'rm -f "$NAV_FILE" "$CARDS_FILE" "$HEAD_FILE"' EXIT
 
 BUILD_ID=$(build_id)
 rm -rf "$OUT"

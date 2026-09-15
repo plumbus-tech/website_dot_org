@@ -17,6 +17,34 @@ directory it lives in (`ls -a`), so visitors browse the site like a filesystem.
 | anything else                 | copied as-is (images, PDFs, `CNAME`, `typography.css`)   |
 
 Hidden files and directories are ignored. Math (`$x$`, `\[…\]`) renders with KaTeX.
+A page with `#+DRAFT: t` isn't rendered or listed (cards show it greyed out).
+
+Org only captions images and tables. For other figures (display math, a table
+with its caption below) use a figure block:
+
+```org
+#+begin_figure
+\[x^2 + y^2 = 1\]
+#+begin_figcaption
+The unit circle.
+#+end_figcaption
+#+end_figure
+```
+
+## Cards
+
+`NAV_STYLE=cards` swaps the terminal nav bar for a site bar (`SITE_LOGO` +
+`SITE_TITLE`, linking home), and every index page lists its entries as a grid
+of picture cards below its content. A card's label and picture come from the
+entry's org file (`dir/index.org` for a directory):
+
+```org
+#+CARD_TITLE: 1: Bits, How a Computer Works   (default: #+TITLE, else the name)
+#+CARD_IMAGE: ../images/1.svg                 (relative to the org file)
+```
+
+Card styles (`.wdo-bar`, `.wdo-cards`, `.wdo-card`, `.wdo-card-img`,
+`.wdo-card-label`, `.wdo-draft`) can be overridden in your `typography.css`.
 
 Each build writes a content hash to `version.txt` and into every page. Pages
 check it on load and reload themselves when a newer build is deployed, so
@@ -28,10 +56,15 @@ Optional, at the site root; it's sourced by bash.
 
 ```bash
 SITE_HOST=example.org                            # prompt host; default: CNAME, else dir name
+NAV_STYLE=terminal                               # terminal (default) or cards
+SITE_TITLE="My Site"                             # cards site bar; default: SITE_HOST
+SITE_LOGO=logo.svg                               # cards site bar icon, site-root relative
 CONTENT_WIDTH=60em                               # max page width, centered; default 60em
 declare -A NAV_OVERRIDE=(                        # replace a nav entry: "target|label"
     [cv]="cv/resume.pdf|resume.pdf"              # target is site-root relative or a URL
 )
+NAV_ORDER=(preface)                              # entry names listed first, in this order
+HEAD_INCLUDE=head.html                           # added to every <head>; $root$ = path to site root
 EXCLUDE=(README.md "drafts/*")                   # globs relative to the site root
 ```
 
@@ -39,6 +72,9 @@ EXCLUDE=(README.md "drafts/*")                   # globs relative to the site ro
 
 The image ships a default `typography.css`; put your own at the site root to
 replace it.
+
+KaTeX options (macros, `trust`, …) go in `window.katexOptions`, set from a
+`<script>` in your `HEAD_INCLUDE`.
 
 ## Usage
 

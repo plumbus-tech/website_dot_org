@@ -1,0 +1,3 @@
+#+CARD_TITLE: Coming soon
+#+CARD_IMAGE: ../cover.svg
+#+DRAFT: t

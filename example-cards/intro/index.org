@@ -1,0 +1,12 @@
+#+CARD_TITLE: Introduction
+#+CARD_IMAGE: ../cover.svg
+
+* Numbers
+Points live in \(\RR^2\).
+
+#+begin_figure
+\[x^2 + y^2 = 1\]
+#+begin_figcaption
+The unit circle.
+#+end_figcaption
+#+end_figure

@@ -42,6 +42,16 @@ jobs:
           grep -q 'href="https://github.com/plumbus-tech/website_dot_org"' $out/index.html
           grep -q 'guest@example.org:~/sub' $out/sub/page.html
           grep -q katex $out/notes.html
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/example-cards:/site" website_dot_org:test build . build
+          out=example-cards/build
+          test -f $out/intro/index.html
+          test ! -e $out/soon/index.html
+          test ! -e $out/head.html
+          grep -q '<a class="wdo-card" href="intro/index.html"><div class="wdo-card-img"><img src="cover.svg"' $out/index.html
+          grep -q 'wdo-draft' $out/index.html
+          grep -q 'href="../logo.svg"' $out/intro/index.html
+          grep -q '<figcaption>The unit circle.</figcaption>' $out/intro/index.html
+          test "$(grep -o 'class="wdo-card[ "]' $out/index.html | head -1)" = 'class="wdo-card"'
 
       - uses: docker/metadata-action@v6
         id: meta
